@@ -1,0 +1,59 @@
+status:
+  state: online
+kind: project
+spec:
+  default_image: gcr.io/iguazio/llm-serving:1.7.0
+  desired_state: online
+  source: ''
+  functions:
+  - url: model_server.py
+    name: llm-server
+    kind: serving
+    image: gcr.io/iguazio/llm-serving:1.7.0
+  - url: train.py
+    name: train
+    kind: job
+    image: gcr.io/iguazio/monitoring-demo-adapters:1.7.0
+  - url: metric_sample.py
+    name: metric-sample
+    kind: job
+    image: mlrun/mlrun
+  - url: generate_ds.py
+    name: generate-ds
+    kind: job
+    image: gcr.io/iguazio/llm-serving:1.7.0
+  workflows:
+  - name: main
+    code: "import mlrun\nfrom kfp import dsl\n\n    \n@dsl.pipeline(\n    name=\"\
+      GenAI alerts demo\"\n)\n\ndef kfpipeline(metric_name: str, \n              \
+      \ input_ds):\n    \n    project = mlrun.get_current_project()\n    \n    sample\
+      \ = project.run_function(\n        function=\"metric-sample\",\n        name=\"\
+      metric-sample\",\n        handler=\"sample\",\n        params = {\"metric_name\"\
+      \ : metric_name},\n        outputs=['alert_triggered']\n    )\n\n    with dsl.Condition(sample.outputs['alert_triggered']\
+      \ == \"True\"):\n\n        # Generate a new DS based on the traffic\n      \
+      \  ds = project.run_function(\n            function=\"generate-ds\",\n     \
+      \       handler=\"generate_ds\",\n            params={\"input_ds\" : input_ds},\
+      \ \n            outputs=[\"new-train-ds\",\"dataset\"])\n        \n        #\
+      \ Re-train the new model        \n        train = project.run_function(\n  \
+      \          function=\"train\",\n            params={\n                \"dataset\"\
+      : \"mlrun/banking-orpo-opt\",\n                \"base_model\": \"google/gemma-2b\"\
+      ,\n                \"new_model\": \"mlrun/gemma-2b-bank-v0.2\",\n          \
+      \      \"device\": \"cuda:0\"},\n            handler=\"train\",\n          \
+      \  outputs=[\"model\"],\n            ).after(ds)\n        \n        # Deploy\
+      \ the function with the new (re-trained) model\n        deploy = project.get_function('llm-server')\n\
+      \        deploy.add_model(\n            \"google-gemma-2b\",\n            class_name=\"\
+      LLMModelServer\",\n            llm_type=\"HuggingFace\",\n            model_name=\"\
+      google/gemma-2b\",\n            adapter=\"mlrun/gemma-2b-bank-v0.2\", \n   \
+      \         model_path=f\"store://models/{project.name}/google-gemma-2b:latest\"\
+      ,\n            generate_kwargs={\n                \"do_sample\": True,\n   \
+      \             \"top_p\": 0.9,\n                \"num_return_sequences\": 1,\n\
+      \                \"max_length\": 80,\n            },\n            device_map=\"\
+      cuda:0\",\n        )\n        deploy.set_tracking()\n        project.deploy_function(\"\
+      llm-server\").after(train)\n        \n"
+  params:
+    default_image: gcr.io/iguazio/llm-serving:1.7.0
+  owner: edmond
+  conda: ''
+metadata:
+  name: tutorial
+  created: '2024-09-17T11:21:38.430000'
